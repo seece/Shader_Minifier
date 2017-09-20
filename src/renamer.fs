@@ -6,7 +6,6 @@ open Ast
 type renameMode = Unambiguous | Frequency | Context
 
 let mutable renameMode = Unambiguous
-let mutable forbiddenDeclNames:string list = []
 
 let doNotOverloadList = Ast.noRenamingList
 
@@ -97,6 +96,7 @@ type Env = {
   max: int
   fct: Map<Ident, Map<int, Ident>>
   reusable: Ident list
+  forbidden: Ident list
 }
 
 let mutable numberOfUsedIdents = 0
@@ -191,8 +191,8 @@ let renDecl isTopLevel env (ty:Type, vars) : Env * Decl =
           CGen.export "" decl.name newName // TODO: first argument seems now useless
           env, newName
       else
-        // HACK(cce): Don't consider any function name because of NVIDIA's buggy GLSL compiler.
-        let l = env.reusable |> List.filter (fun x -> not (List.exists (fun n -> n = x) forbiddenDeclNames))
+        // HACK(cce): Don't consider any global name because of NVIDIA's buggy GLSL compiler.
+        let l = env.reusable |> List.filter (fun x -> not (List.exists (fun n -> n = x) env.forbidden))
         newId {env with map = env.map; reusable = l} decl.name
 
     let init = Option.map (renExpr env) decl.init
@@ -287,16 +287,17 @@ let rec renTopLevel li =
             |> List.filter (fun x -> x.Length = 1)
             |> List.filter (fun x -> not <| List.exists ((=) x) Ast.forbiddenNames)
   // Rename top-level values first
-  let env = {map = Map.empty ; max = 0 ; fct = Map.empty ; reusable = idents}
+  let env = {map = Map.empty ; max = 0 ; fct = Map.empty ; reusable = idents; forbidden = []}
   let env = doNotOverload env doNotOverloadList
   let env, li = renList env renTopLevelName li
-  let funcNames =
+
+  // Gather all global variable & function names and bundle them with the rename env
+  let topNames =
     li |> List.choose(fun x ->
          match x with
          | Function (t, i) -> Some t.fName
+         | TLDecl (t, d) -> Some d.Head.name
          | _ -> None)
 
-  forbiddenDeclNames <- funcNames
-
   // Then, rename local values
-  List.map (renTopLevelBody env) li, numberOfUsedIdents-1
+  List.map (renTopLevelBody {env with forbidden = topNames }) li, numberOfUsedIdents-1
