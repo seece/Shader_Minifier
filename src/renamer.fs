@@ -6,6 +6,7 @@ open Ast
 type renameMode = Unambiguous | Frequency | Context
 
 let mutable renameMode = Unambiguous
+let mutable forbiddenDeclNames:string list = []
 
 let doNotOverloadList = Ast.noRenamingList
 
@@ -190,7 +191,9 @@ let renDecl isTopLevel env (ty:Type, vars) : Env * Decl =
           CGen.export "" decl.name newName // TODO: first argument seems now useless
           env, newName
       else
-        newId env decl.name
+        // HACK(cce): Don't consider any function name because of NVIDIA's buggy GLSL compiler.
+        let l = env.reusable |> List.filter (fun x -> not (List.exists (fun n -> n = x) forbiddenDeclNames))
+        newId {env with map = env.map; reusable = l} decl.name
 
     let init = Option.map (renExpr env) decl.init
     env, {decl with name=newName; init=init}
@@ -287,6 +290,13 @@ let rec renTopLevel li =
   let env = {map = Map.empty ; max = 0 ; fct = Map.empty ; reusable = idents}
   let env = doNotOverload env doNotOverloadList
   let env, li = renList env renTopLevelName li
+  let funcNames =
+    li |> List.choose(fun x ->
+         match x with
+         | Function (t, i) -> Some t.fName
+         | _ -> None)
+
+  forbiddenDeclNames <- funcNames
 
   // Then, rename local values
   List.map (renTopLevelBody env) li, numberOfUsedIdents-1
